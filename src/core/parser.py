@@ -36,14 +36,28 @@ def extract_json(llm_response: str) -> dict:
                 extracted_text = extracted_text[4:].strip()
             return json.loads(extracted_text)
             
-        # Son Çare: İçindeki herhangi bir { } bloğunu yakalamaya çalış
-        match_braces = re.search(r'\{.*?\}', llm_response, re.DOTALL)
+        # 4. JSON Objelerini kaba kuvvetle (Brute-Force Regex) arama
+        # Metin içinde { ile başlayıp } ile biten en büyük JSON bloğunu yakala
+        match_braces = re.search(r'\{.*\}', llm_response, re.DOTALL)
         if match_braces:
-            return json.loads(match_braces.group(0))
+            try:
+                candidate = match_braces.group(0)
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                pass # Yakalanan blok JSON değilse sonrakine devam et
 
         # Hiçbirine uymuyorsa hata fırlat
         logger.error(f"Geçerli bir JSON formatı bulunamadı. Gelen Metin: {llm_response[:100]}...")
-        return {"action": "error", "message": "Ajanın yanıtı JSON formatında değildi."}
+        
+        # Son Kurtarma Operasyonu (Fault Tolerance): LLM bazen sadece JSON döner ama sonuna '}' koymayı unutabilir.
+        if llm_response.strip().startswith("{") and not llm_response.strip().endswith("}"):
+            try:
+                forced_json = llm_response.strip() + "}"
+                return json.loads(forced_json)
+            except json.JSONDecodeError:
+                pass
+
+        return {"action": "error", "message": "Ajanın yanıtı JSON formatında değildi veya ayıklanamadı."}
 
     except json.JSONDecodeError as decode_error:
         logger.error(f"JSON Çözümleme Hatası tespit edildi: {str(decode_error)}")

@@ -15,15 +15,29 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 # Sistemin ana beynini yönetecek olan kural seti
-SYSTEM_PROMPT = """Sen 'Wingman' adında OTONOM bir bilgisayar asistanısın.
+def get_dynamic_system_prompt() -> str:
+    """Çalışma anında sistemdeki ortam değişkenlerini alarak prompt'u oluşturur."""
+    desktop_path = os.path.join(os.path.join(os.environ['USERPROFILE']), 'Desktop')
+    onedrive_desktop = os.path.join(os.environ['USERPROFILE'], 'OneDrive', 'Desktop')
+    if os.path.exists(onedrive_desktop):
+        desktop_path = onedrive_desktop
+        
+    return f"""Sen 'Wingman' adında OTONOM bir bilgisayar asistanısın.
 GÖREVİN: Kullanıcının niyetini anla, elindeki ARAÇLARDAN (TOOLS) en uygun olanı seçerek SADECE JSON dön.
+
+--- SİSTEM BİLGİSİ (ÇOK ÖNEMLİ) ---
+İşletim Sistemi: Windows
+Kullanıcı Dizini: {os.environ.get('USERPROFILE')}
+Masaüstü Dizini: {desktop_path} (Aramalarını ve dosya operasyonlarını bu tam yolda yapmalısın)
 
 ANA KURALLAR (KESİNLİKLE UYULACAK):
 1. YALNIZCA SANA BİLDİRİLEN ARAÇLARI KULLANABİLİRSİN. Listede olmayan hiçbir aracı (action) uydurma.
-2. SOHBET VE EKSİK BİLGİ: Eğer kullanıcı sohbet ediyorsa, eksik bilgi veriyorsa (örn: "kapat" ama neyi?) veya sorusu mevcut OS araçlarıyla yapılamıyorsa, KESİNLİKLE "chat" aracını kullanarak Türkçe yanıt dön veya ondan detay iste.
-3. OTONOMİ VE POWERSHELL: Elinde özel bir araç yoksa ancak kullanıcı sistemde bir eylem istiyorsa (Örn: "Şu hatayı analiz et", "Kayıt defterine bak", "IP adresimi bul"), "run_powershell" aracını kullanarak kendi komutunu yaz ve sistemde çalıştırıp öğren.
+2. SOHBET / EKSİK BİLGİ: Kullanıcı eksik bilgi verdiyse ("kapat" ama neyi?) veya sohbet ediyorsa, "chat" aracıyla yanıt ver.
+3. KÖR OTONOMİ YASAKTIR: Eğer run_powershell ile KÖRLEMESİNE BİR DOSYA/KLASÖR SİLMEN veya DEĞİŞTİRMEN İSTENİYORSA (Örn: Remove-Item), BUNU İLK ADIMDA ASLA YAPMA.
+   - ÖNCE "run_powershell" aracı ile Get-ChildItem (ls) veya Test-Path kullanarak hedefin orada olduğundan dizini okuyarak EMİN OL. (Örn: `Get-ChildItem '{desktop_path}' -Filter ...`)
+   - Ancak sen okumayı bitirip kullanıcı sana "Evet sil" derse silme komutunu gönder. İkinci bir emre kadar ASLA Remove-Item/del komutu BİRLEŞTİREREK kullanma.
 4. Yanıtın SADECE ve SADECE geçerli bir JSON objesi olmalıdır. Asla Markdown (```) kullanma, fazladan düz metin ekleme.
-5. JSON Formatı: {"action": "arac_ismi", "params": {"parametre_adi": "deger"}}
+5. JSON Formatı: {{"action": "arac_ismi", "params": {{"parametre_adi": "deger"}} }}
 """
 
 class LLMRouter:
@@ -36,8 +50,11 @@ class LLMRouter:
             )
             self.model = OLLAMA_MODEL
         else:
-            self.client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-            self.model = "gpt-4o-mini" # Standart OpenAI Modeli
+            self.client = AsyncOpenAI(
+                api_key=OPENAI_API_KEY,
+                base_url="https://api.groq.com/openai/v1" # Groq API Uç Noktası
+            )
+            self.model = "openai/gpt-oss-120b" # Groq için istenen model
             
         # Bağlam kopukluğunu engellemek için ajana verilen Kısa Süreli Bellek (Memory)
         self.history = []
@@ -56,7 +73,8 @@ class LLMRouter:
         # Sistemin o an bildiği tüm araçlar prompta enjekte ediliyor.
         schema_text = str(tools_schema)
         
-        full_prompt = f"{SYSTEM_PROMPT}\n\nKullanılabilir Araçlar (Araç seçtiğinde 'action' için adını kullan):\n{schema_text}"
+        dynamic_system_prompt = get_dynamic_system_prompt()
+        full_prompt = f"{dynamic_system_prompt}\n\nKullanılabilir Araçlar (Araç seçtiğinde 'action' için adını kullan):\n{schema_text}"
         
         # 1- Sistem emri
         messages = [{"role": "system", "content": full_prompt}]

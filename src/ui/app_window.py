@@ -41,11 +41,35 @@ class AppWindow(ctk.CTk):
 
     def _build_ui(self):
         """Arayüz bileşenlerini konumlandırır."""
-        # 1. Chat Log (Geçmiş) Ekranı
-        self.txt_log = ctk.CTkTextbox(self, width=380, height=380, state="disabled")
-        self.txt_log.pack(pady=(10, 5), padx=10)
+        # Üst Panel: Otonomi Anahtarı
+        top_frame = ctk.CTkFrame(self, fg_color="transparent")
+        top_frame.pack(fill="x", padx=10, pady=(10, 0))
         
-        # 2. Giriş Kutusu Çerçevesi
+        self.switch_autonomy = ctk.CTkSwitch(
+            top_frame, 
+            text="Tam Otonomi Modu (İzin İsteme)",
+            onvalue=True,
+            offvalue=False
+        )
+        self.switch_autonomy.pack(side="right")
+        
+        # Orta Panel: Sekmeler (Sohbet / Terminal)
+        self.tabview = ctk.CTkTabview(self, width=380, height=360)
+        self.tabview.pack(pady=(5, 5), padx=10)
+        
+        self.tabview.add("Sohbet")
+        self.tabview.add("Terminal Log")
+        
+        # 1. Sohbet Sekmesi
+        self.txt_log = ctk.CTkTextbox(self.tabview.tab("Sohbet"), width=360, height=300, state="disabled")
+        self.txt_log.pack(pady=5, padx=5)
+        
+        # 2. Terminal Log Sekmesi
+        self.txt_cmd_log = ctk.CTkTextbox(self.tabview.tab("Terminal Log"), width=360, height=300, state="disabled", text_color="#00FF00", font=("Consolas", 12))
+        self.txt_cmd_log.pack(pady=5, padx=5)
+        self.txt_cmd_log.insert("end", "> Terminal izleme başlatıldı...\n")
+        
+        # Alt Panel: Giriş Kutusu Çerçevesi
         input_frame = ctk.CTkFrame(self, fg_color="transparent")
         input_frame.pack(fill="x", padx=10, pady=5)
         
@@ -68,6 +92,13 @@ class AppWindow(ctk.CTk):
         
         self.txt_log.see("end") # Ekranı hep en alta (yeni mesaja) kaydır
         self.txt_log.configure(state="disabled")
+        
+    def append_cmd_log(self, command: str, output: str):
+        """Arka plan Terminal sekmesine komut çıktılarını ekler."""
+        self.txt_cmd_log.configure(state="normal")
+        self.txt_cmd_log.insert("end", f"\n> {command}\n{output}\n")
+        self.txt_cmd_log.see("end")
+        self.txt_cmd_log.configure(state="disabled")
 
     def send_message(self):
         """Gönder butonuna (veya Enter'a) basıldığında tetiklenir."""
@@ -85,7 +116,7 @@ class AppWindow(ctk.CTk):
         # Böylece UI donmuyor. Bekleme ekranı kalmıyor.
         asyncio.run_coroutine_threadsafe(self._process_message(user_text), self.loop)
 
-    async def _process_message(self, text: str):
+    async def _process_message(self, text: str, is_system_feedback: bool = False):
         """Modelden asenkron olarak sonuç bekler ve işler."""
         try:
             # 1. Beyni Tetikle
@@ -96,12 +127,30 @@ class AppWindow(ctk.CTk):
             plan_obj = extract_json(raw_response)
             logger.info(f"Ayrıştırılan Plan: {plan_obj}")
             
+            # Switch açıldıysa auto_approve True olarak executor'a yollanır
+            auto_approve = bool(self.switch_autonomy.get())
+            
             # 3. Yürütücüye Gönder
-            result = self.executor.execute(plan_obj)
+            result = self.executor.execute(plan_obj, auto_approve=auto_approve)
             
-            # 4. Arayüze Sonucu Yansıt
-            self.after(0, self._update_ui_after_process, result.get("message", "İşlem Tamamlandı."))
+            action_name = plan_obj.get("action", "none")
             
+            # Eğer powershell kullanıldıysa Terminal sekmesini besle
+            if action_name == "run_powershell":
+                self.after(0, self.append_cmd_log, plan_obj.get("params", {}).get("command", ""), result.get("message", ""))
+                
+            # 4. Arayüze Yansıtma ve Otonomi Döngüsü (Re-Act / Chain of Thought)
+            if action_name in ["chat", "none", "error"]:
+                # İşlem bir eylem gerektirmeyen (son) noktaya ulaştı. Döngüyü kır ve kullanıcıya dön.
+                self.after(0, self._update_ui_after_process, result.get("message", "İşlem Tamamlandı."))
+            else:
+                # Otonomi: Bir OS eylemi (powershell, app_open vs) yapıldıysa, sonucu Ajanın kendisine rapor et
+                # Ve sıradaki hamleyi yapmasını bekle (UI kilitli kalmaya devam eder, süreç bitene kadar).
+                system_feedback = f"[SİSTEM ÇIKTISI]: '{action_name}' eylemi '{result.get('status')}' olarak sonuçlandı.\nÇıktı Detayı: {result.get('message')}\n\n-> Görev tamamlandıysa 'chat' aracı ile bana bilgi ver. Eğer hata aldıysan veya işlemi sürdürmen gerekiyorsa yeni bir 'action' yolla."
+                
+                logger.info(f"Otonomi Zinciri Tetiklendi. Ajan Sonucu Değerlendiriyor...")
+                asyncio.run_coroutine_threadsafe(self._process_message(system_feedback, is_system_feedback=True), self.loop)
+                
         except Exception as e:
             logger.error(f"Mesaj işleme hatası: {str(e)}")
             self.after(0, self._update_ui_after_process, f"Zihinsel Hata: {str(e)}")

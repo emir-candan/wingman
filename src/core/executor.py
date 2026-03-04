@@ -26,9 +26,9 @@ class Executor:
             "run_powershell": run_powershell
         }
         
-    def execute(self, plan: dict) -> dict:
+    def execute(self, plan: dict, auto_approve: bool = False) -> dict:
         """
-        Gelen JSON planını yürütür.
+        Gelen JSON planını yürütür. Arayüzden gelen Otonomi yetkisine bakar.
         Örn: plan = {"action": "set_volume", "params": {"level": 50}}
         """
         action_name = plan.get("action")
@@ -52,14 +52,19 @@ class Executor:
             
             # 4. GÜVENLİK KONTROLÜ (Security Gate)
             if action_name in ["close_app", "safe_delete", "run_powershell"]:
-                target = params.get("app_name") or params.get("path") or params.get("command") or "Bilinmeyen Hedef"
-                msg_text = f"Dikkat!\nAjan şu Kritik İşlemi/Komutu çalıştırmak istiyor:\n\n{action_name}\n-> {target}\n\nOnaylıyor musunuz?"
                 
-                # Kullanıcıya Evet/Hayır penceresi aç (Ana thread dışında çalışabildiği için tkinter direkt kullanılır)
-                user_consent = messagebox.askyesno("Kritik İşlem Onayı", msg_text)
-                if not user_consent:
-                    logger.warning(f"Kullanıcı eylemi reddetti: {action_name}")
-                    return {"status": "info", "message": "İşlem sizin tarafınızdan iptal edildi."}
+                # Otonomi Anahtarı Açık İse Sorgusuz Sualsiz Geç!
+                if auto_approve:
+                    logger.warning(f"TAM OTONOMİ DEVREDE! Güvenlik kalkanı aşılarak {action_name} doğrudan çalıştırılıyor.")
+                else:
+                    target = params.get("app_name") or params.get("path") or params.get("command") or "Bilinmeyen Hedef"
+                    msg_text = f"Dikkat!\nAjan şu Kritik İşlemi/Komutu çalıştırmak istiyor:\n\n{action_name}\n-> {target}\n\nOnaylıyor musunuz?"
+                    
+                    # Kullanıcıya Evet/Hayır penceresi aç
+                    user_consent = messagebox.askyesno("Kritik İşlem Onayı", msg_text)
+                    if not user_consent:
+                        logger.warning(f"Kullanıcı eylemi reddetti: {action_name}")
+                        return {"status": "info", "message": "İşlem sizin tarafınızdan iptal edildi."}
             
             try:
                 # Python dilindeki dinamik argüman çözme (kwargs) yöntemi (**params) kullanılarak 
